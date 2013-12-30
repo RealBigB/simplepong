@@ -11,10 +11,10 @@ import pygame
 from pygame import sprite
 from pygame.locals import * # XXX
 
-from simplegame import base
-from simplegame.base import BaseSprite, GameProperty
+from simplegame.base import State, Game, GameProperty, DelegateProperty
+from simplegame.sprites import ImageSprite
 
-logger = logging.getLogger(os.path.basename(__file__))
+logger = logging.getLogger(__name__)
 
 ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(ROOT_DIR, "data")
@@ -29,7 +29,7 @@ def BallOffCourt(side, last_hit_by):
 # ---------------------------------------------------------------------------
 # Game objects
 # ---------------------------------------------------------------------------
-class Bat(BaseSprite):
+class Bat(ImageSprite):
     """ A movable tennis 'bat' with which one hits the ball
 
     XXX Document me
@@ -50,8 +50,8 @@ class Bat(BaseSprite):
 
     image = os.path.join(DATA_DIR, "bat.png")
     
-    def __init__(self, side, player, screen=None):
-        super(Bat, self).__init__(self.image, screen)
+    def __init__(self, side, player, area):
+        super(Bat, self).__init__(self.image, area)
         
         self.side = side
         self.player = player
@@ -91,118 +91,58 @@ class Bat(BaseSprite):
         elif self.side == self.SIDE_RIGHT:
             self.rect.midright = self.area.midright
 
-# ---------------------------------------------------------------------------        
-class Ball(BaseSprite):
-    """ A ball that will move across the screen.
+# ---------------------------------------------------------------------------
+def StateProperty(attr, mode="r"):
+    return DelegateProperty("state", attr, mode)
 
-    :param vector: an (angle, speed) tuple
-    :param player1: XXX
-    :param player2: XXX
+class BallStrategy(object):
+    def __init__(self, state):
+        self.state = state
+
+    ball = StateProperty("ball")
+    players = StateProperty("players")
+    player1 = StateProperty("player1")
+    player2 = StateProperty("player2")
+
+    @staticmethod
+    def get_ball_rect_for_player(ball, player):
+        p = player.rect
+        b = ball.rect.copy()
+        b.centerx = p.centerx
+        b.midleft = p.midright
+        return b
+
+    def update(self):
+        pass
+
+
+class NoopStrategy(BallStrategy):
+    pass
+
     
-    :attr vector: an (angle, speed) tuple
-    :attr hit: boolen flag, has the ball been hit by a player
-    """
+class ServiceStrategy(BallStrategy):
+    """ A ball sticking to a :class:Bat` """
 
-    image = os.path.join(DATA_DIR, "ball.png")
-    
-    def __init__(self, angle, speed, players, screen=None):
-        super(Ball, self).__init__(self.image, screen)
-        self._initstate = (angle, speed)
-        self.angle = angle
-        self.speed = speed
-        self.hit = False
-        self.last_hit_by = None
-        self.players = players
+    def __init__(self, state):
+        super(ServiceStrategy, self).__init__(state)
 
-    def reinit(self):
-        self.angle, self.speed = self._initstate
-        self.rect = pygame.Rect(0, 0, self.rect.width, self.rect.height)
+    def update(self, *args, **kw):
+        self.ball.rect = self.get_ball_rect_for_player(self.ball, self.player1)
         
-    # XXX do we use this, really ?
-    @property
-    def vector(self):
-        return self.angle, self.speed
-
-    @vector.setter
-    def vector(self, vector):
-        self.angle, self.speed = vector
-
-    def _check_hit(self):
-        if not self.area.contains(self.rect):
-            return False
         
-        # Deflate the rectangles so you can't catch a ball behind the bat
-        for player in self.players:
-            player.rect.inflate(-3, -3)
 
-        # Do ball and bat collide?
-        # Note I put in an odd rule that sets self.hit to 1 when they collide, and unsets it in the next
-        # iteration. this is to stop odd ball behaviour where it finds a collision *inside* the
-        # bat, the ball reverses, and is still inside the bat, so bounces around inside.
-        # This way, the ball can always escape and bounce away cleanly
-        if self.hit:
-            self.hit = False
-        else:
-            for player in self.players:
-                if self.rect.colliderect(player.rect) == 1:
-                    logger.debug("ball hit by player %s", player)
-                    self.hit = True
-                    self.last_hit_by = player
-                    # calculate new angle
-                    self.angle = math.pi - self.angle
-                    break
-                
-        return True
-            
-    def _check_out(self):
-        if self.area.contains(self.rect):
-            return False
+class PlayingStrategy(BallStrategy):
+
+    def __init__(self, state):
+        super(PlayingStrategy, self).__init__(state)
         
-        # area (is supposed to) contain the ball,
-        # so area.collidepoint(self.rect.XXX) will return True
-        # as long as the ball is within the area.
-        # What we want here is to detect if the ball is
-        # outside the area - or, more exactly, on which
-        # side of the area it got out.
-
-        # tl : rect.topleft is outside the area
-        tl = not self.area.collidepoint(self.rect.topleft)
-        # tr : rect.topright is outside the area
-        tr = not self.area.collidepoint(self.rect.topright)
-        # bl : rect.bottomleft is outside the area
-        bl = not self.area.collidepoint(self.rect.bottomleft)
-        # br : rect.bottomrigh is outside the area
-        br = not self.area.collidepoint(self.rect.bottomright)
-
-        hit_top = (tr and tl)
-        hit_bottom = (br and bl)
-        out_left = tl and bl
-        out_right = tr and br
-
-        if hit_top or hit_bottom:
-            # calculate new angle
-            self.angle = - self.angle
-
-        if out_left or out_right:
-            logger.debug("going out %s ", ("left", "right")[out_right])
-            # XXX debug
-            # if out_left:
-            #     self.angle = math.pi - self.angle
-            #     return
-            
-            side = (0, 1)[out_right]
-            evt = BallOffCourt(side, self.last_hit_by) 
-            pygame.event.post(evt)
-            self.last_hit_by = None
-            # calculate new angle
-            #self.angle = math.pi - self.angle
-
     def update(self, state=None, *args, **kw):
         """ """
-        newpos = self.getnewpos(*self.vector)
-        self.rect = self.rect.move(newpos)
+        newpos = self.getnewpos(self.ball.angle, self.ball.speed)
+        self.ball.rect = self.ball.rect.move(newpos)
         if not self._check_hit():
             self._check_out()
+
 
     def getnewpos(self, angle, speed):
         """ calculate a new position according to (angle, speed).
@@ -216,6 +156,117 @@ class Ball(BaseSprite):
         dx = speed * math.cos(angle)
         dy = speed * math.sin(angle)
         return dx, dy
+    
+    def _check_hit(self):
+        if not self.ball.area.contains(self.ball.rect):
+            return False
+        
+        # Deflate the rectangles so you can't catch a ball behind the bat
+        for player in self.players:
+            player.rect.inflate(-3, -3)
+
+        # Do ball and bat collide?
+        # Note I put in an odd rule that sets self.hit to 1 when they collide, and unsets it in the next
+        # iteration. this is to stop odd ball behaviour where it finds a collision *inside* the
+        # bat, the ball reverses, and is still inside the bat, so bounces around inside.
+        # This way, the ball can always escape and bounce away cleanly
+        if self.ball.hit:
+            self.ball.hit = False
+        else:
+            for player in self.players:
+                if self.ball.rect.colliderect(player.rect) == 1:
+                    logger.debug("ball hit by player %s", player)
+                    self.ball.hit = True
+                    self.ball.last_hit_by = player
+                    # calculate new angle
+                    self.ball.angle = math.pi - self.ball.angle
+                    break
+                
+        return True
+            
+    def _check_out(self):
+        area = self.ball.area
+        rect = self.ball.rect
+        
+        if area.contains(rect):
+            return False
+        
+        # area (is supposed to) contain the ball,
+        # so area.collidepoint(self.rect.XXX) will return True
+        # as long as the ball is within the area.
+        # What we want here is to detect if the ball is
+        # outside the area - or, more exactly, on which
+        # side of the area it got out.
+
+        # tl : rect.topleft is outside the area
+        tl = not area.collidepoint(rect.topleft)
+        # tr : rect.topright is outside the area
+        tr = not area.collidepoint(rect.topright)
+        # bl : rect.bottomleft is outside the area
+        bl = not area.collidepoint(rect.bottomleft)
+        # br : rect.bottomrigh is outside the area
+        br = not area.collidepoint(rect.bottomright)
+
+        hit_top = (tr and tl)
+        hit_bottom = (br and bl)
+        out_left = tl and bl
+        out_right = tr and br
+
+        if hit_top or hit_bottom:
+            # calculate new angle
+            self.ball.angle = - self.ball.angle
+
+        if out_left or out_right:
+            logger.debug("going out %s ", ("left", "right")[out_right])
+            # XXX debug
+            # if out_left:
+            #     self.angle = math.pi - self.angle
+            #     return
+            
+            side = (0, 1)[out_right]
+            evt = BallOffCourt(side, self.ball.last_hit_by) 
+            pygame.event.post(evt)
+            self.ball.last_hit_by = None
+            # calculate new angle
+            #self.angle = math.pi - self.angle
+    
+# ---------------------------------------------------------------------------
+class Ball(ImageSprite):
+    """ A ball that will move across the screen.
+
+    :param vector: an (angle, speed) tuple
+    :param player1: XXX
+    :param player2: XXX
+    
+    :attr vector: an (angle, speed) tuple
+    :attr hit: boolen flag, has the ball been hit by a player
+    """
+
+    image = os.path.join(DATA_DIR, "ball.png")
+
+    def __init__(self, angle, speed, players, area):
+        super(Ball, self).__init__(self.image, area)
+        self._initstate = (angle, speed)
+        self.angle = angle
+        self.speed = speed
+        self.hit = False
+        self.last_hit_by = None
+        self.players = players
+        
+
+    def on_state_change(self, newstate):
+        self.strategy = newstate.get_strategy_for("ball")
+        
+    def reinit(self):
+        self.angle, self.speed = self._initstate
+        #self.rect = pygame.Rect(0, 0, self.rect.width, self.rect.height)
+        self.rect = self.strategy.get_ball_rect_for_player(self, self.players[0])
+        
+        
+    def update(self, state=None, *args, **kw):
+        """ """
+        self.strategy.update()
+
 
 
 # ---------------------------------------------------------------------------
@@ -225,35 +276,49 @@ class Ball(BaseSprite):
 # - intro : the introduction / instructions screen
 # - playing : a party, from first service until one player wins
 
-class Intro(base.State):
+class Intro(State):
     NAME = 'intro'
 
 # ---------------------------------------------------------------------------
-class Party(base.State):
+class Party(State):
     NAME = 'party'
     
 # ---------------------------------------------------------------------------
-class Won(base.State):
+class Won(State):
     NAME = 'won'
 
     
 # ---------------------------------------------------------------------------
-class GameState(base.State):
+class GameState(State):
     screen = GameProperty("screen")
+    court = GameProperty("court")
     ball = GameProperty("ball")
     players = GameProperty("players")
-    player1 = GameProperty("player1")
-    player2 = GameProperty("player2")
     playersprites = GameProperty("playersprites")
     ballsprite = GameProperty("ballsprite")
+    allsprites = GameProperty("allsprites")
+
+    ball_strategy = NoopStrategy
     
-    
+    @property
+    def player1(self):
+        return self.players[0]
+
+    @property
+    def player2(self):
+        return self.players[1]
+
+    def get_strategy_for(self, what):
+        if what == "ball":
+            logger.debug("strategy : %s", self.ball_strategy)
+            return self.ball_strategy(self)
+        logger.warning("no strategy_for '%s'", what)
+        
     def on_init(self):
         self.bgcolor = self.game.getopt("bgcolor", (0, 0, 0))
         self.background = pygame.Surface(self.screen.get_size()).convert()
         self.background.fill(self.bgcolor)
-        self.allsprites = (self.ballsprite, self.playersprites)
-
+        
     def clearsprites(self):
         for rect in self.ball.rect, self.player1.rect, self.player2.rect:
             self.screen.blit(self.background, rect, rect)
@@ -265,6 +330,9 @@ class GameState(base.State):
     def updatesprites(self):
         pass
     
+    def on_start(self, resume):
+        self.ball.on_state_change(self)
+
     def on_update(self):
         self.clearsprites()
         self.updatesprites()
@@ -272,48 +340,92 @@ class GameState(base.State):
     def on_render(self):
         self.drawsprites()
 
+    def on_done(self):
+        self.clearsprites()
 
 # ---------------------------------------------------------------------------
-class Service(GameState):
-    NAME = 'service'
-
-    def on_init(self):
-        super(Service, self).on_init()
+class ServiceText(object):
+    def __init__(self, message, screen, background):
+        self.message = message
+        self.screen = screen
+        self.background = background
         font = pygame.font.Font(None, 36)
         # render(text, antialias, color, background=None) -> Surface
         # where background => bgcolor
-        self.text = font.render("Press any key to start", True, (100, 100, 100))
+        self.text = font.render(self.message, True, (100, 100, 100))
         self.textrect = self.text.get_rect(centerx=self.background.get_width()/2)
         self.rendered = False
-        
-    def on_start(self, resume):
-        self.clearsprites()
-        self.ball.reinit()
-        for player in self.players:
-            player.reinit()
-        self.rendered = False
-        
-        logger.debug("press any key to start")
 
-    def on_keyup(self, event):
-        self.game.goto("playing")
-        self.done = True
-
-    
-    def on_render(self):
+    def draw(self):
         if not self.rendered:
             self.screen.blit(self.text, self.textrect)
             self.rendered = True
+
+    def clear(self):
+        self.screen.blit(self.background, self.textrect, self.textrect)
+        
+# ---------------------------------------------------------------------------
+class Service(GameState):
+    NAME = 'service'
+    ball_strategy = ServiceStrategy
+    
+    def on_init(self):
+        super(Service, self).on_init()
+        self.text = ServiceText("Press space to start", self.screen, self.background)
+        
+    def on_start(self, resume):
+        super(Service, self).on_start(resume)
+        self.ball.reinit()
+        for player in self.players:
+            player.reinit()
+       
+    def on_keydown(self, event):
+        # XXX quelque chose de plus élégant ?
+        if event.key == K_a:
+            self.player1.moveup()
+        elif event.key == K_q:
+            self.player1.movedown()
+        elif event.key == K_UP:
+            self.player2.moveup()
+        elif event.key == K_DOWN:
+            self.player2.movedown()
+
+    def on_keyup(self, event):
+        if event.key == K_SPACE:
+            self.goto("playing")
+            return
+        
+        elif event.key == K_a or event.key == K_q:
+            self.player1.still()
+        elif event.key == K_UP or event.key == K_DOWN:
+            self.player2.still()
+
+    def on_render(self):
+        self.text.draw()
         super(Service, self).on_render()
 
     def on_done(self):
-        self.screen.blit(self.background, self.textrect, self.textrect)
+        self.text.clear()
         super(Service, self).on_done()
 
+    def updatesprites(self):
+        for sprite in self.allsprites:
+            sprite.update(self)
         
 # ---------------------------------------------------------------------------
 class Playing(GameState):
     NAME = 'playing'
+    ball_strategy = PlayingStrategy
+    
+    def updatesprites(self):
+        for sprite in self.allsprites:
+            sprite.update(self)
+
+    def on_start(self, resume):
+        super(Playing, self).on_start(resume)
+        self.ball.reinit()
+        # for player in self.players:
+        #     player.reinit()
 
     def on_keydown(self, event):
         # XXX quelque chose de plus élégant ?
@@ -338,6 +450,7 @@ class Playing(GameState):
 
     def on_done(self):
         # stop players from moving
+        self.clearsprites()
         for player in self.players:
             player.still()
             
@@ -361,9 +474,6 @@ class Playing(GameState):
                 self.goto("service")
                 
 
-    def updatesprites(self):
-        for sprite in self.allsprites:
-            sprite.update(self)
 
 # ---------------------------------------------------------------------------
 class Paused(GameState):
@@ -381,7 +491,7 @@ class Paused(GameState):
 # ---------------------------------------------------------------------------
 # The scoreboard
 # ---------------------------------------------------------------------------
-class Score(object):
+class ScoreWidget(object):
     SIDE_LEFT = 0
     SIDE_RIGHT = 1
 
@@ -414,7 +524,7 @@ class ScoreBoard(object):
         self.bgcolor = self.game.getopt("bgcolor", (0, 0, 0))
         self.background = pygame.Surface(self.screen.get_size()).convert()
         self.background.fill(self.bgcolor)
-        self.scores = [Score(side, self.game.screen, self.background) for side in (0, 1)]
+        self.scores = [ScoreWidget(side, self.game.screen, self.background) for side in (0, 1)]
         
     screen = GameProperty("screen")
 
@@ -429,7 +539,7 @@ class ScoreBoard(object):
 # ---------------------------------------------------------------------------
 # The game
 # ---------------------------------------------------------------------------
-class Pong(base.Game):
+class Pong(Game):
     STATES = (
         #Intro,
         #Party,
@@ -458,15 +568,17 @@ class Pong(base.Game):
         ]
     
     def before_init_states(self):
-        self.players = tuple(Bat(side, player, self.screen) for player, side in enumerate(Bat.SIDES))
-        self.ball = Ball(self.options.angle, self.options.speed, self.players, self.screen)
-        self.playersprites = sprite.RenderPlain(self.players)
-        self.ballsprite = sprite.RenderPlain(self.ball)
+        self.court = self.screen.get_rect()
         self.scoreboard = ScoreBoard(self)
 
-    def on_init(self):
-        #import pdb; pdb.set_trace()
-        # XXX marche pas ???
+        self.players = tuple(Bat(side, player, self.court) for player, side in enumerate(Bat.SIDES))
+        self.ball = Ball(self.options.angle, self.options.speed, self.players, self.court)
+
+        self.playersprites = sprite.RenderPlain(self.players)
+        self.ballsprite = sprite.RenderPlain(self.ball)
+        self.allsprites = (self.ballsprite, self.playersprites)
+
+    def post_init(self):
         pygame.event.set_allowed(self.ALLOWED_EVENTS)
         self.init_scores()
         
@@ -485,86 +597,5 @@ class Pong(base.Game):
             and self.scores[player] - self.scores[not player] >= 2
             )
     
-    @property
-    def player1(self):
-        return self.players[0]
-
-    @property
-    def player2(self):
-        return self.players[1]
 
     
-    # def new_ball(self):
-    #     self.state = self.STATE_PENDING
-    #     self.ball.reinit()
-    #     for player in self.players:
-    #         player.reinit()
-    #     self.state = self.STATE_READY
-    #     logger.debug("press any key to start")
-    #     self.play()
-        
-    # def new_game(self):
-    #     self._init_scores()
-    #     self.new_ball()
-        
-    # def on_start(self):
-    #     # Blit everything to the screen
-    #     pygame.display.set_caption(self.caption)
-    #     self.screen.blit(self.background, (0, 0))
-    #     pygame.display.flip()
-
-    # def play(self):
-
-    #     # Initialise clock
-    #     clock = pygame.time.Clock()
-
-    #     self.paused = False
-    #     # Event loop
-    #     while True:
-    #         # Make sure game doesn't run at more than 60 frames per second
-    #         clock.tick(60)
-    #         for event in pygame.event.get():
-    #             if event.type == QUIT:
-    #                 raise SystemExit
-                
-    #             if self.state != self.STATE_PLAYING:
-    #                 if self.state == self.STATE_READY  and event.type == KEYUP:
-    #                     self.state = self.STATE_PLAYING
-    #                 continue
-                
-    #             if self.state == self.STATE_PLAYING:
-    #                 if event.type == OFFCOURT:
-    #                     logger.debug("OUT")
-    #                     player = event.last_hit_by
-    #                     if player:
-    #                         self.update_scores(player.player)
-    #                         self.display_scores()
-    #                         if self.has_won(player.player):
-    #                             logger.debug("player %s won", player)
-    #                             self.new_game()
-    #                             return
-    #                         self.new_ball()
-    #                         continue
-                        
-    #                 if self.set_paused(event):
-    #                     continue
-                    
-    #                 self.dispatch(event)
-            
-                
-    #         self.screen.blit(self.background, self.ball.rect, self.ball.rect)
-    #         self.screen.blit(self.background, self.player1.rect, self.player1.rect)
-    #         self.screen.blit(self.background, self.player2.rect, self.player2.rect)
-            
-    #         # for sprite in (self.ball, self.player1, self.player2):
-    #         #     # XXX make blit a method of the groups ???
-    #         #     self.screen.blit(self.background, sprite.rect, sprite.rect)
-
-    #         if self.state == self.STATE_PLAYING and not self.paused:
-    #             # XXX why 2 groups ????
-    #             self.ballsprite.update()
-    #             self.playersprites.update()
-
-    #         self.ballsprite.draw(self.screen)
-    #         self.playersprites.draw(self.screen)
-    #         pygame.display.flip()

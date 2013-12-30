@@ -10,75 +10,34 @@ import math
 
 import pygame
 from pygame.locals import * # XXX
-from pygame import sprite
 
 from simplegame.events import EVNAMES, ALL_EVENTS
-
-logger = logging.getLogger(os.path.basename(__file__))
-
-# ---------------------------------------------------------------------------
-ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
-DATA_DIR = os.path.join(ROOT_DIR, "data")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Helper functions and classes
-# ---------------------------------------------------------------------------
-def load_img(path):
-    """ Load image from data directory and return
-    a converted pygame image object and it's rect
-
-    :param name: the name of the image file
-    :return: a (:class:`pygame.image`, :class:`pygame:Rect`) tuple
-    """
-    try:
-        image = pygame.image.load(path)
-        if image.get_alpha() is None:
-            image = image.convert()
-        else:
-            image = image.convert_alpha()
-    except pygame.error as e:
-        logger.exception('Cannot load image:', fullname)
-        raise
-    return image, image.get_rect()
-
-# ---------------------------------------------------------------------------
-class GameProperty(object):
-    def __init__(self, name, mode='r'):
-        self.name = name
-
+class DelegateProperty(object):
+    def __init__(self, delegate, attr, mode='r'):
+        self.attr = attr
+        self.delegate = delegate
+        self.mode = mode
+        
+    def get_delegate(self, instance):
+        return getattr(instance, self.delegate)
+    
     def __get__(self, instance, cls):
         if instance is None:
             return self
-        return getattr(instance.game, self.name)
+        return getattr(self.get_delegate(instance), self.attr)
 
     def __set__(self, instance, value):
         if 'w' not in self.mode:
-            raise AttributeError("Attribute %s is readonly" % self.name)
-        setattr(instance, self.name, value)
+            raise AttributeError("Attribute %s is readonly" % self.attr)
+        setattr(self.get_delegate(instance), self.attr, value)
+
+# ---------------------------------------------------------------------------
+def GameProperty(attr, mode="r"):
+    return DelegateProperty("game", attr, mode)
         
-            
-
-# ---------------------------------------------------------------------------
-# Base game classes
-# ---------------------------------------------------------------------------
-class BaseSprite(sprite.Sprite):
-    """ Abstract base class, factors out common parts of our game objects
-
-    :param image_name: the name of the image to load for thsi child class
-    
-    :attr image: a :class:`pygame.image` instance
-    :attr rect: a :class:`pygame.rect` for the :attr:`image`
-    :attr area: the :class:`pygame.Rect` for the main screen or None
-    """
-    def __init__(self, image_name, screen=None):
-        super(BaseSprite, self).__init__()
-        self.image, self.rect = load_img(image_name)
-        if screen is None:
-            screen = pygame.display.get_surface()
-        self.area = screen.get_rect()
-
-    
-
 # ---------------------------------------------------------------------------
 class Options(object):
     def __init__(self, options, defaults=None):
@@ -119,13 +78,12 @@ class Game(object):
         self._fps = None
 
         self._init_options(options)
-        
         self._init_pygame()
         self._init_clock()
         self._init_screen()
         self.before_init_states()
         self._init_states()
-        self.on_init()
+        self.post_init()
         
     # -----------------------------------------------------------------------
     # Housekeeping
@@ -216,7 +174,7 @@ class Game(object):
         do it here
         """
         
-    def on_init(self):
+    def post_init(self):
         """ Called at the end of the `__init__`.
         Do any additional initialisation here.
         """
@@ -244,7 +202,7 @@ class Game(object):
         #import pdb; pdb.set_trace()
         while True:
             if self.empty:
-                break ## Game over!
+                break # Nothing left to do ?
             
             self._state = self.pop()
             logger.debug("Main loop now switching to: %s", self._state)
