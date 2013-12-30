@@ -4,17 +4,20 @@ cf http://www.pygame.org/docs/tut/tom/
 """
 import logging
 import os
-import sys
 import random
 import math
 
 import pygame
-from pygame.locals import * # XXX
 from pygame import sprite
+from pygame.locals import * # XXX
 
-from simplepong.base import BaseSprite
+from simplegame import base
+from simplegame.base import BaseSprite, GameProperty
 
 logger = logging.getLogger(os.path.basename(__file__))
+
+ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
+DATA_DIR = os.path.join(ROOT_DIR, "data")
 
 # ---------------------------------------------------------------------------
 # Custom events
@@ -45,7 +48,7 @@ class Bat(BaseSprite):
     STATE_MOVEUP = "moveup"
     STATE_MOVEDOWN = "movedown"
 
-    image = "bat.png"
+    image = os.path.join(DATA_DIR, "bat.png")
     
     def __init__(self, side, player, screen=None):
         super(Bat, self).__init__(self.image, screen)
@@ -60,7 +63,7 @@ class Bat(BaseSprite):
     def __str__(self):
         return "player%s" % (self.player + 1)
     
-    def update(self):
+    def update(self, state=None, *args, **kw):
         """ XXX """
         newpos = self.rect.move(self.movepos)
         if self.area.contains(newpos):
@@ -100,7 +103,7 @@ class Ball(BaseSprite):
     :attr hit: boolen flag, has the ball been hit by a player
     """
 
-    image = "ball.png"
+    image = os.path.join(DATA_DIR, "ball.png")
     
     def __init__(self, angle, speed, players, screen=None):
         super(Ball, self).__init__(self.image, screen)
@@ -190,12 +193,11 @@ class Ball(BaseSprite):
             side = (0, 1)[out_right]
             evt = BallOffCourt(side, self.last_hit_by) 
             pygame.event.post(evt)
-
-            # self.offcourt()
+            self.last_hit_by = None
             # calculate new angle
             #self.angle = math.pi - self.angle
 
-    def update(self):
+    def update(self, state=None, *args, **kw):
         """ """
         newpos = self.getnewpos(*self.vector)
         self.rect = self.rect.move(newpos)
@@ -216,25 +218,232 @@ class Ball(BaseSprite):
         return dx, dy
 
 
+# ---------------------------------------------------------------------------
+# The game states
+# ---------------------------------------------------------------------------
+# states are
+# - intro : the introduction / instructions screen
+# - playing : a party, from first service until one player wins
+
+class Intro(base.State):
+    NAME = 'intro'
 
 # ---------------------------------------------------------------------------
-# The game itself
-# ---------------------------------------------------------------------------
-class ParamGetter(object):
-    def __init__(self, name):
-        self.name = name
-
-    def __get__(self, instance, cls=None):
-        if instance is None:
-            return self
-        return instance._params[self.name]
-    def __set__(self, instance, value):
-        raise AttributeError("Attribute %s is read-only" % self.name)
+class Party(base.State):
+    NAME = 'party'
     
 # ---------------------------------------------------------------------------
-class Pong(object):
-    _defaults = {
-        "size": (640, 480),
+class Won(base.State):
+    NAME = 'won'
+
+    
+# ---------------------------------------------------------------------------
+class GameState(base.State):
+    screen = GameProperty("screen")
+    ball = GameProperty("ball")
+    players = GameProperty("players")
+    player1 = GameProperty("player1")
+    player2 = GameProperty("player2")
+    playersprites = GameProperty("playersprites")
+    ballsprite = GameProperty("ballsprite")
+    
+    
+    def on_init(self):
+        self.bgcolor = self.game.getopt("bgcolor", (0, 0, 0))
+        self.background = pygame.Surface(self.screen.get_size()).convert()
+        self.background.fill(self.bgcolor)
+        self.allsprites = (self.ballsprite, self.playersprites)
+
+    def clearsprites(self):
+        for rect in self.ball.rect, self.player1.rect, self.player2.rect:
+            self.screen.blit(self.background, rect, rect)
+
+    def drawsprites(self):
+        for sprite in self.allsprites:
+            sprite.draw(self.screen)
+
+    def updatesprites(self):
+        pass
+    
+    def on_update(self):
+        self.clearsprites()
+        self.updatesprites()
+
+    def on_render(self):
+        self.drawsprites()
+
+
+# ---------------------------------------------------------------------------
+class Service(GameState):
+    NAME = 'service'
+
+    def on_init(self):
+        super(Service, self).on_init()
+        font = pygame.font.Font(None, 36)
+        # render(text, antialias, color, background=None) -> Surface
+        # where background => bgcolor
+        self.text = font.render("Press any key to start", True, (100, 100, 100))
+        self.textrect = self.text.get_rect(centerx=self.background.get_width()/2)
+        self.rendered = False
+        
+    def on_start(self, resume):
+        self.clearsprites()
+        self.ball.reinit()
+        for player in self.players:
+            player.reinit()
+        self.rendered = False
+        
+        logger.debug("press any key to start")
+
+    def on_keyup(self, event):
+        self.game.goto("playing")
+        self.done = True
+
+    
+    def on_render(self):
+        if not self.rendered:
+            self.screen.blit(self.text, self.textrect)
+            self.rendered = True
+        super(Service, self).on_render()
+
+    def on_done(self):
+        self.screen.blit(self.background, self.textrect, self.textrect)
+        super(Service, self).on_done()
+
+        
+# ---------------------------------------------------------------------------
+class Playing(GameState):
+    NAME = 'playing'
+
+    def on_keydown(self, event):
+        # XXX quelque chose de plus élégant ?
+        if event.key == K_a:
+            self.player1.moveup()
+        elif event.key == K_q:
+            self.player1.movedown()
+        elif event.key == K_UP:
+            self.player2.moveup()
+        elif event.key == K_DOWN:
+            self.player2.movedown()
+
+    def on_keyup(self, event):
+        if event.key == K_SPACE:
+            logger.debug("Playing -> pause")
+            self.goto("paused")
+        
+        elif event.key == K_a or event.key == K_q:
+            self.player1.still()
+        elif event.key == K_UP or event.key == K_DOWN:
+            self.player2.still()
+
+    def on_done(self):
+        # stop players from moving
+        for player in self.players:
+            player.still()
+            
+    def on_userevent(self, event):
+        if event.type == OFFCOURT:
+            logger.debug("OUT")
+            player = event.last_hit_by
+            if player:
+                self.game.update_scores(player.player)
+                if self.game.has_won(player.player):
+                    logger.debug("player %s won", player)
+                    self.goto("won")
+                else:
+                    self.goto("service")
+            else:
+                # aucun des deux n'a touché la balle
+                # à terme ça ne devrait pas arriver
+                # puisque c'est un des joueurs qui aura le
+                # service, mais pour le moment...
+                logger.debug("oops, quels maladroits")
+                self.goto("service")
+                
+
+    def updatesprites(self):
+        for sprite in self.allsprites:
+            sprite.update(self)
+
+# ---------------------------------------------------------------------------
+class Paused(GameState):
+    NAME = 'paused'
+
+    def on_keyup(self, event):
+        if event.key == K_SPACE:
+            logger.debug("Pause -> playing")
+            self.game.goto("playing")
+            self.done = True
+
+    def updatespites(self):
+        pass
+
+# ---------------------------------------------------------------------------
+# The scoreboard
+# ---------------------------------------------------------------------------
+class Score(object):
+    SIDE_LEFT = 0
+    SIDE_RIGHT = 1
+
+    def __init__(self, side, screen, background):
+        self.side = side
+        self.screen = screen
+        self.background = background
+        self.font = pygame.font.Font(None, 20)
+        self.labeltext = "Player %s : %%02d" % (self.side + 1)
+        self.y = (self.background.get_size()[1] - self.font.size(self.labeltext)[1])  - 20
+        self.x = (30, self.background.get_size()[0] - self.font.size(self.labeltext)[0] - 20)[self.side]
+        self.text = None
+        self.rect = None
+        self.draw(0)
+        
+    def draw(self, score):
+        self.clear()
+        self.text = self.font.render(self.labeltext % score, True, (255, 255, 255))
+        self.rect = self.text.get_rect(topleft=(self.x, self.y))
+        self.screen.blit(self.text, self.rect)
+
+    def clear(self):
+        if self.text:
+            self.screen.blit(self.background, self.rect, self.rect)
+        
+
+class ScoreBoard(object):
+    def __init__(self, game):
+        self.game = game
+        self.bgcolor = self.game.getopt("bgcolor", (0, 0, 0))
+        self.background = pygame.Surface(self.screen.get_size()).convert()
+        self.background.fill(self.bgcolor)
+        self.scores = [Score(side, self.game.screen, self.background) for side in (0, 1)]
+        
+    screen = GameProperty("screen")
+
+    def draw(self):
+        for side, score in self.game.scores.items():
+            self.scores[side].draw(score)
+            
+    def clear(self):
+        for side in self.game.scores.keys():
+            self.scores[side].clear()
+
+# ---------------------------------------------------------------------------
+# The game
+# ---------------------------------------------------------------------------
+class Pong(base.Game):
+    STATES = (
+        #Intro,
+        #Party,
+        Service,
+        Playing,
+        Paused,
+        Won
+        )
+
+    INITIAL_STATE = "service"
+    SCREEN_SIZE = (640, 480)
+    FPS = 60.
+    
+    OPTIONS_DEFAULTS = {
         "bgcolor" : (0, 0, 0),
         "speed" : 13,
         "angle": 0.47,
@@ -242,40 +451,40 @@ class Pong(object):
         # A suivre
         }
 
-    size = ParamGetter("size")
-    bgcolor = ParamGetter("bgcolor")
-    speed = ParamGetter("speed")
-    angle = ParamGetter("angle")
-    caption = ParamGetter("caption")
-
-    STATE_PENDING = "pending"
-    STATE_READY = "ready"
-    STATE_PLAYING = "playing"
+    ALLOWED_EVENTS = [
+        QUIT, # obviously
+        KEYUP, KEYDOWN,
+        USEREVENT, OFFCOURT
+        ]
     
-    def __init__(self, **kw):
-        pygame.init()
-
-        self._params = dict((k, kw.pop(k, default)) for k, default in self._defaults.iteritems())
-        self.screen = pygame.display.set_mode(self.size)
-        self.background = pygame.Surface(self.screen.get_size()).convert()
-        self.background.fill(self.bgcolor)
-
+    def before_init_states(self):
         self.players = tuple(Bat(side, player, self.screen) for player, side in enumerate(Bat.SIDES))
-        self.ball = Ball(self.angle, self.speed, self.players, self.screen)
-
+        self.ball = Ball(self.options.angle, self.options.speed, self.players, self.screen)
         self.playersprites = sprite.RenderPlain(self.players)
         self.ballsprite = sprite.RenderPlain(self.ball)
+        self.scoreboard = ScoreBoard(self)
 
-        self._init_scores()
-        self.state = None
+    def on_init(self):
+        #import pdb; pdb.set_trace()
+        # XXX marche pas ???
+        pygame.event.set_allowed(self.ALLOWED_EVENTS)
+        self.init_scores()
         
-
-    def _init_scores(self):
+    def init_scores(self):
         self.scores = dict.fromkeys((0, 1), 0)
+        self.scoreboard.draw()
             
     def update_scores(self, player):
         self.scores[player] += 1
+        logger.debug("score : %s", self.scores)
+        self.scoreboard.draw()
         
+    def has_won(self, player):
+        return (
+            self.scores[player] >= 21
+            and self.scores[player] - self.scores[not player] >= 2
+            )
+    
     @property
     def player1(self):
         return self.players[0]
@@ -284,114 +493,78 @@ class Pong(object):
     def player2(self):
         return self.players[1]
 
-    def set_paused(self, event):
-        if event.type == KEYUP and event.key == K_SPACE:
-            self.paused = not self.paused
-            logger.debug("PAUSE : %s", ("out", "in")[self.paused])
-        return self.paused
-        
-    def dispatch(self, event):
-        # XXX quelque chose de plus élégant ?
-        if event.type == KEYDOWN:
-            if event.key == K_a:
-                self.player1.moveup()
-            elif event.key == K_q:
-                self.player1.movedown()
-            elif event.key == K_UP:
-                self.player2.moveup()
-            elif event.key == K_DOWN:
-                self.player2.movedown()
-
-        elif event.type == KEYUP:
-            if event.key == K_a or event.key == K_q:
-                self.player1.still()
-            elif event.key == K_UP or event.key == K_DOWN:
-                self.player2.still()
-
-    def run(self):
-        self.new_game()
-
-    def new_ball(self):
-        self.state = self.STATE_PENDING
-        self.ball.reinit()
-        for player in self.players:
-            player.reinit()
-        self.state = self.STATE_READY
-        logger.debug("press any key to start")
-        self.play()
-        
-    def new_game(self):
-        self._init_scores()
-        self.new_ball()
-        
-    def display_scores(self):
-        logger.debug("scores : %s", self.scores)
-
-    def update_scores(self, player):
-        self.scores[player] += 1
     
-    def has_won(self, player):
-        return (
-            self.scores[player] >= 21
-            and self.scores[player] - self.scores[not player] >= 2
-            )
+    # def new_ball(self):
+    #     self.state = self.STATE_PENDING
+    #     self.ball.reinit()
+    #     for player in self.players:
+    #         player.reinit()
+    #     self.state = self.STATE_READY
+    #     logger.debug("press any key to start")
+    #     self.play()
+        
+    # def new_game(self):
+    #     self._init_scores()
+    #     self.new_ball()
+        
+    # def on_start(self):
+    #     # Blit everything to the screen
+    #     pygame.display.set_caption(self.caption)
+    #     self.screen.blit(self.background, (0, 0))
+    #     pygame.display.flip()
 
-    def play(self):
-        # Blit everything to the screen
-        pygame.display.set_caption(self.caption)
-        self.screen.blit(self.background, (0, 0))
-        pygame.display.flip()
+    # def play(self):
 
-        # Initialise clock
-        clock = pygame.time.Clock()
+    #     # Initialise clock
+    #     clock = pygame.time.Clock()
 
-        self.paused = False
-        # Event loop
-        while True:
-            # Make sure game doesn't run at more than 60 frames per second
-            clock.tick(60)
-            for event in pygame.event.get():
-                if event.type == QUIT:
-                    raise SystemExit
+    #     self.paused = False
+    #     # Event loop
+    #     while True:
+    #         # Make sure game doesn't run at more than 60 frames per second
+    #         clock.tick(60)
+    #         for event in pygame.event.get():
+    #             if event.type == QUIT:
+    #                 raise SystemExit
                 
-                if self.state != self.STATE_PLAYING:
-                    if self.state == self.STATE_READY  and event.type == KEYUP:
-                        self.state = self.STATE_PLAYING
-                    continue
+    #             if self.state != self.STATE_PLAYING:
+    #                 if self.state == self.STATE_READY  and event.type == KEYUP:
+    #                     self.state = self.STATE_PLAYING
+    #                 continue
                 
-                if self.state == self.STATE_PLAYING:
-                    if event.type == OFFCOURT:
-                        logger.debug("OUT")
-                        player = event.last_hit_by
-                        if player:
-                            self.update_scores(player.player)
-                            self.display_scores()
-                            if self.has_won(player.player):
-                                logger.debug("player %s won", player)
-                                self.new_game()
-                                return
-                            self.new_ball()
-                            continue
+    #             if self.state == self.STATE_PLAYING:
+    #                 if event.type == OFFCOURT:
+    #                     logger.debug("OUT")
+    #                     player = event.last_hit_by
+    #                     if player:
+    #                         self.update_scores(player.player)
+    #                         self.display_scores()
+    #                         if self.has_won(player.player):
+    #                             logger.debug("player %s won", player)
+    #                             self.new_game()
+    #                             return
+    #                         self.new_ball()
+    #                         continue
                         
-                    if self.set_paused(event):
-                        continue
+    #                 if self.set_paused(event):
+    #                     continue
                     
-                    self.dispatch(event)
+    #                 self.dispatch(event)
             
                 
-            self.screen.blit(self.background, self.ball.rect, self.ball.rect)
-            self.screen.blit(self.background, self.player1.rect, self.player1.rect)
-            self.screen.blit(self.background, self.player2.rect, self.player2.rect)
+    #         self.screen.blit(self.background, self.ball.rect, self.ball.rect)
+    #         self.screen.blit(self.background, self.player1.rect, self.player1.rect)
+    #         self.screen.blit(self.background, self.player2.rect, self.player2.rect)
             
-            # for sprite in (self.ball, self.player1, self.player2):
-            #     # XXX make blit a method of the groups ???
-            #     self.screen.blit(self.background, sprite.rect, sprite.rect)
+    #         # for sprite in (self.ball, self.player1, self.player2):
+    #         #     # XXX make blit a method of the groups ???
+    #         #     self.screen.blit(self.background, sprite.rect, sprite.rect)
 
-            if self.state == self.STATE_PLAYING and not self.paused:
-                # XXX why 2 groups ????
-                self.ballsprite.update()
-                self.playersprites.update()
+    #         if self.state == self.STATE_PLAYING and not self.paused:
+    #             # XXX why 2 groups ????
+    #             self.ballsprite.update()
+    #             self.playersprites.update()
 
-            self.ballsprite.draw(self.screen)
-            self.playersprites.draw(self.screen)
-            pygame.display.flip()
+    #         self.ballsprite.draw(self.screen)
+    #         self.playersprites.draw(self.screen)
+    #         pygame.display.flip()

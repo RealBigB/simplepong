@@ -12,6 +12,7 @@ import pygame
 from pygame.locals import * # XXX
 from pygame import sprite
 
+from simplegame.events import EVNAMES, ALL_EVENTS
 
 logger = logging.getLogger(os.path.basename(__file__))
 
@@ -22,16 +23,15 @@ DATA_DIR = os.path.join(ROOT_DIR, "data")
 # ---------------------------------------------------------------------------
 # Helper functions and classes
 # ---------------------------------------------------------------------------
-def load_img(name):
+def load_img(path):
     """ Load image from data directory and return
     a converted pygame image object and it's rect
 
     :param name: the name of the image file
     :return: a (:class:`pygame.image`, :class:`pygame:Rect`) tuple
     """
-    fullname = os.path.join(DATA_DIR, name)
     try:
-        image = pygame.image.load(fullname)
+        image = pygame.image.load(path)
         if image.get_alpha() is None:
             image = image.convert()
         else:
@@ -42,16 +42,21 @@ def load_img(name):
     return image, image.get_rect()
 
 # ---------------------------------------------------------------------------
-class ParamGetter(object):
-    def __init__(self, name):
+class GameProperty(object):
+    def __init__(self, name, mode='r'):
         self.name = name
 
-    def __get__(self, instance, cls=None):
+    def __get__(self, instance, cls):
         if instance is None:
             return self
-        return instance._params[self.name]
+        return getattr(instance.game, self.name)
+
     def __set__(self, instance, value):
-        raise AttributeError("Attribute %s is read-only" % self.name)
+        if 'w' not in self.mode:
+            raise AttributeError("Attribute %s is readonly" % self.name)
+        setattr(instance, self.name, value)
+        
+            
 
 # ---------------------------------------------------------------------------
 # Base game classes
@@ -66,13 +71,13 @@ class BaseSprite(sprite.Sprite):
     :attr area: the :class:`pygame.Rect` for the main screen or None
     """
     def __init__(self, image_name, screen=None):
-        super(ImgRectSprite, self).__init__()
+        super(BaseSprite, self).__init__()
         self.image, self.rect = load_img(image_name)
         if screen is None:
             screen = pygame.display.get_surface()
         self.area = screen.get_rect()
 
-
+    
 
 # ---------------------------------------------------------------------------
 class Options(object):
@@ -85,170 +90,284 @@ class Options(object):
             if name in container:
                 return container[name]
         raise AttributeError("No option named %s" % name)
-     
+
+
 # ---------------------------------------------------------------------------
-class BaseGame(object):
+class Game(object):
     """ The main game object - mainly, a stack of game states.
 
     - initializes pygame, screen etc,
     - handles states stack and transitions
     - eventually act as mediator between states
+
     """
     
-    INITITAL_STATE = NotImplemented
+    INITIAL_STATE = NotImplemented
     SCREEN_SIZE = NotImplemented
     FPS = NotImplemented
-    OPTIONS_DEFAULTS = None
-    STATES = {}
-    
+    OPTIONS_DEFAULTS = {}
+    STATES = ()
+
     # -----------------------------------------------------------------------
     def __init__(self, **options):
-        self.options = Options(options, self.OPTIONS_DEFAULTS)
+        self._options = None
         self._stack = [] ## A stack of game screens.
         self._states = {}
         self._state = None
         self._clock = None 
         self._screen = None
         self._fps = None
+
+        self._init_options(options)
+        
         self._init_pygame()
         self._init_clock()
         self._init_screen()
+        self.before_init_states()
         self._init_states()
-    
+        self.on_init()
+        
     # -----------------------------------------------------------------------
     # Housekeeping
     # -----------------------------------------------------------------------
+    def _init_options(self, options):
+        defaults = self.OPTIONS_DEFAULTS.copy()
+        defaults.update(
+            initial_state=self.INITIAL_STATE,
+            screen_size=self.SCREEN_SIZE,
+            fps=self.FPS
+            )
+        self.options = Options(options, defaults)
+        
     def _init_pygame(self):
         pygame.init()
 
     def _init_clock(self):
         self._clock = pygame.time.Clock()
-        self._fps = self.getopt("fps", self.FPS)        
+        self._fps = self.options.fps        
 
     def _init_screen(self):
         screen = self.getopt("screen", None)
         if screen is None:
             screen = pygame.display.set_mode(
-                self.getopt("screen_size", self.SCREEN_SIZE)
+                self.options.screen_size
                 )
         self._screen = screen
         
     def _init_states(self):
-        for statename, statecls in self.STATES:
-            self._states[statename] = statecls(self)
-        self._push(self._states[self.INITITAL_STATE])
+        for statecls in self.STATES:
+            self._states[statecls.NAME] = statecls(self)
+        self.push(self._states[self.options.initial_state])
         
     # -----------------------------------------------------------------------
     # Options
     # -----------------------------------------------------------------------
     def getopt(self, name, default=None):
-        return self.options.get(name, default)
+        return getattr(self.options, name, default)
     
     # -----------------------------------------------------------------------
     # States stack
     # -----------------------------------------------------------------------
-    def _get_state(self, name):
+    def get_state(self, name):
         return self._states.get(name)
 
-    def _push(self, state):
-        self._stack.push(state)
+    def push(self, state):
+        logger.debug("push %s", state)
+        self._stack.append(state)
 
-    def _pop(self):
+    def pop(self):
+        logger.debug("pop %s", self._stack[-1])
         return self._stack.pop()
 
     @property
-    def _empty(self):
-        return bool(self._stack)
+    def empty(self):
+        return not bool(self._stack)
 
     @property
-    def current_state(self):
+    def state(self):
         return self._state
 
     def goto(self, statename):
-        state = self._get_state(statename)
-        self._push(state)
+        state = self.get_state(statename)
+        self.push(state)
 
     # -----------------------------------------------------------------------
-    # Clock
+    # Clock & display & screen
     # -----------------------------------------------------------------------
     def tick(self, fps=None):
         fps = fps or self._fps
         self._clock.tick(fps)
-        
+
+    @property
+    def display(self):
+        return pygame.display
+
+    @property
+    def screen(self):
+        return self._screen
+    
     # -----------------------------------------------------------------------
     # Local events
     # -----------------------------------------------------------------------
+    def before_init_states(self):
+        """ Called just before `_init_states()`.
+
+        If you have anything to do that states may depends on,
+        do it here
+        """
+        
+    def on_init(self):
+        """ Called at the end of the `__init__`.
+        Do any additional initialisation here.
+        """
+        pass
+    
     def on_start(self):
-        """ do any additional startup time stuff here """
+        """ Called just before entering the main loop.
+
+        Do any additional startup time stuff here
+        """
         pass
     
     def on_exit(self):
-        """ do any additional exit time stuff here """
+        """ Called just before exiting the main loop.
+
+        do any additional exit time stuff here """
         pass
     
     # -----------------------------------------------------------------------
     # Entry point
     # -----------------------------------------------------------------------
     def run(self):
+        #import pdb; pdb.set_trace()
         self.on_start()
+        #import pdb; pdb.set_trace()
         while True:
-            if self._empty:
+            if self.empty:
                 break ## Game over!
             
             self._state = self.pop()
-            logger.debug("Returned to main loop. Now switching to: %s", self._state)
-            self._state.run()
+            logger.debug("Main loop now switching to: %s", self._state)
+            self._state.run(pygame.event)
+            logger.debug("Returned to main loop from: %s", self._state)
 
         self.on_exit()
+
+    def quit(self, state):
+        logger.debug("quitting from state %s", state.NAME)
+        self.on_exit()
+        raise SystemExit()
         
 
 # ---------------------------------------------------------------------------
-class BaseState(object):
+class State(object):
     """ A game state.
 
     Handles the event loop, rendering, etc for a given game state.
     """
     NAME = NotImplemented
+    FPS = None
+    ALLOWED_EVENTS = ()
     
+    # a State can be one of
+    # - running
+    # - suspended
+    # - done
+
     def __init__(self, game):
         self.game = game
+        self.fps = self.FPS or game.options.fps
         self.done = False
+        self.on_init()
         
-    def on_start(self):
-        """ Do any additional initialisation here """
+    def __str__(self):
+        return self.NAME
+
+    
+    def on_init(self):
+        """ Called at the end of the `__init__`.
+        Do any additional initialisation here.
+        """
+        pass
+    
+    def on_start(self, resume=False):
+        """ Called just before entering the main loop.
+
+        Do any additional startup time stuff here.
+
+        :param resume: if True, resuming from a previous call
+        """
+        pass
+    
+    def on_update(self):
+        """ Do updates here """
+        pass
+        
+    def on_render(self):
+        """ Do the rendering here """
         pass
 
     def on_done(self):
         """ Do any additional cleaning here """
         pass
 
-    def render(self):
-        """ Do the rendering here """
 
-    def _dispatch(event):
-        handler = getattr(self, "on_%s" % event.type, None)
+    def _block_queue(self, event_queue, clear=True):
+        event_queue.set_allowed(None)
+        if clear:
+            event_queue.clear(ALL_EVENTS)
+            
+    def _unblock_queue(self, event_queue):
+        event_queue.set_allowed(self._get_allowed_events())
+        
+    def _get_allowed_events(self):
+        if self.ALLOWED_EVENTS:
+            return self.ALLOWED_EVENTS
+        if self.game.ALLOWED_EVENTS:
+            return self.game.ALLOWED_EVENTS
+        return ALL_EVENTS
+    
+    def _dispatch(self, event):
+        if event.type >= USEREVENT:
+            evname = "userevent"
+        else:
+            evname = EVNAMES.get(event.type, None)
+            if not evname:
+                logger.debug("Unknown event %s" % event)
+                return
+        hname = "on_%s" % evname.lower()
+        handler = getattr(self, hname, None)
         if handler:
+            logger.debug("calling handler %s for event %s : %s", hname, evname, event)
             handler(event)
                           
     def goto(self, next_state):
-        self.done = True
         self.game.goto(next_state)
+        self.done = True
 
-    def run(self):
-        self._run()
+    def run(self, event_queue):
+        self._block_queue(event_queue)
+        resume = self.done
+        self.done = False
+        self.on_start(resume=resume)
+        self._unblock_queue(event_queue)
         
-    def _run(self):
-        self.on_start()
         while not self.done:
-            for event in pygame.event.get():
+            for event in event_queue.get():
+                if event.type == QUIT:
+                    self.game.quit(self)
                 self._dispatch(event)
 
+            # XXX pas sûr là
             if self.done:
                 break
-
-            self.render()
-            self.game.tick()
+            
+            self.on_update()
+            self.on_render()
+            self.game.display.flip()
+            self.game.tick(self.fps)
         
+        event_queue.clear()
         self.on_done()
         
 
