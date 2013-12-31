@@ -27,6 +27,6 @@ def load_img(path):
         else:
             image = image.convert_alpha()
     except pygame.error as e:
-        logger.exception('Cannot load image:', fullname)
+        logger.exception("Cannot load image '%s' : %s", path, e)
         raise
     return image, image.get_rect()
