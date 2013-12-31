@@ -42,7 +42,9 @@ class BallStrategy(object):
     def update(self):
         pass
 
-
+    def reinit(self):
+        pass
+    
 class NoopStrategy(BallStrategy):
     pass
 
@@ -53,6 +55,10 @@ class ServiceStrategy(BallStrategy):
     def __init__(self, state):
         super(ServiceStrategy, self).__init__(state)
 
+    def reinit(self):
+        self.ball.rect = self.get_ball_rect_for_player(self.ball, self.player1)
+        self.ball.last_hit_by = self.player1
+        
     def update(self, *args, **kw):
         self.ball.rect = self.get_ball_rect_for_player(self.ball, self.player1)
         
@@ -187,7 +193,7 @@ class GameState(State):
     ballsprite = GameProperty("ballsprite")
     allsprites = GameProperty("allsprites")
 
-    ball_strategy = NoopStrategy
+    BALL_STRATEGY = NoopStrategy
     
     @property
     def player1(self):
@@ -197,30 +203,14 @@ class GameState(State):
     def player2(self):
         return self.players[1]
 
-    def get_strategy_for(self, what):
-        if what == "ball":
-            logger.debug("strategy : %s", self.ball_strategy)
-            return self.ball_strategy(self)
-        logger.warning("no strategy_for '%s'", what)
-        
     def on_init(self):
         self.bgcolor = self.game.getopt("bgcolor", (0, 0, 0))
         self.background = pygame.Surface(self.screen.get_size()).convert()
         self.background.fill(self.bgcolor)
+        self.ball_strategy = self.BALL_STRATEGY(self)
         
-    def clearsprites(self):
-        for rect in self.ball.rect, self.player1.rect, self.player2.rect:
-            self.screen.blit(self.background, rect, rect)
-
-    def drawsprites(self):
-        for sprite in self.allsprites:
-            sprite.draw(self.screen)
-
-    def updatesprites(self):
-        pass
-    
     def on_start(self, resume):
-        self.ball.on_state_change(self)
+        pass
 
     def on_update(self):
         self.clearsprites()
@@ -232,21 +222,42 @@ class GameState(State):
     def on_done(self):
         self.clearsprites()
 
+    def clearsprites(self):
+        for rect in self.ball.rect, self.player1.rect, self.player2.rect:
+            self.screen.blit(self.background, rect, rect)
 
+    def drawsprites(self):
+        for sprite in self.allsprites:
+            sprite.draw(self.screen)
+
+    def updatesprites(self):
+        for sprite in self.allsprites:
+            sprite.update(self)
+
+    def reinit_ball(self):
+        self.ball_strategy.reinit()
+    
+    def update_ball(self):
+        self.ball_strategy.update()
+
+    def update_players(self):
+        pass
+    
 # ---------------------------------------------------------------------------
 class Service(GameState):
     NAME = 'service'
-    ball_strategy = ServiceStrategy
     
+    BALL_STRATEGY = ServiceStrategy
+
     def on_init(self):
         super(Service, self).on_init()
         self.text = ServiceText("Press space to start", self.screen, self.background)
         
     def on_start(self, resume):
         super(Service, self).on_start(resume)
-        self.ball.reinit()
+        self.ball.reinit(self)
         for player in self.players:
-            player.reinit()
+            player.reinit(self)
        
     def on_keydown(self, event):
         # XXX quelque chose de plus élégant ?
@@ -277,24 +288,25 @@ class Service(GameState):
         self.text.clear()
         super(Service, self).on_done()
 
-    def updatesprites(self):
-        for sprite in self.allsprites:
-            sprite.update(self)
+
         
 # ---------------------------------------------------------------------------
 class Playing(GameState):
     NAME = 'playing'
-    ball_strategy = PlayingStrategy
-    
-    def updatesprites(self):
-        for sprite in self.allsprites:
-            sprite.update(self)
 
+    BALL_STRATEGY = PlayingStrategy
+    
     def on_start(self, resume):
         super(Playing, self).on_start(resume)
-        self.ball.reinit()
+        self.ball.reinit(self) # XXX
         # for player in self.players:
-        #     player.reinit()
+        #     player.reinit(self)
+
+    def on_done(self):
+        # stop players from moving
+        self.clearsprites()
+        for player in self.players:
+            player.still()
 
     def on_keydown(self, event):
         # XXX quelque chose de plus élégant ?
@@ -317,12 +329,6 @@ class Playing(GameState):
         elif event.key == K_UP or event.key == K_DOWN:
             self.player2.still()
 
-    def on_done(self):
-        # stop players from moving
-        self.clearsprites()
-        for player in self.players:
-            player.still()
-            
     def on_userevent(self, event):
         if event.type == OFFCOURT:
             logger.debug("OUT")
@@ -342,6 +348,10 @@ class Playing(GameState):
                 logger.debug("oops, quels maladroits")
                 self.goto("service")
                 
+            
+    def update_ball(self):
+        PlayingStrategy(self).update()
+
 
 
 # ---------------------------------------------------------------------------

@@ -52,12 +52,12 @@ class Bat(ImageSprite):
         self.speed = 10
         self.state = self.STATE_STILL
         self.movepos = [0,0]
-        self.reinit()
+        self.init_position()
 
     def __str__(self):
         return "player%s" % (self.player + 1)
     
-    def update(self, state=None, *args, **kw):
+    def update(self, state, *args, **kw):
         """ XXX """
         newpos = self.rect.move(self.movepos)
         if self.area.contains(newpos):
@@ -77,13 +77,14 @@ class Bat(ImageSprite):
         self.movepos = [0,0]
         self.state = self.STATE_STILL
 
-    def reinit(self):
-        """ Resets the bat's state to initial state. """
+    def init_position(self):
         if self.side == self.SIDE_LEFT:
             self.rect.midleft = self.area.midleft
         elif self.side == self.SIDE_RIGHT:
             self.rect.midright = self.area.midright
 
+    def reinit(self, state):
+        self.init_position()
     
 # ---------------------------------------------------------------------------
 class Ball(ImageSprite):
@@ -109,18 +110,13 @@ class Ball(ImageSprite):
         self.players = players
         
 
-    def on_state_change(self, newstate):
-        self.strategy = newstate.get_strategy_for("ball")
-        
-    def reinit(self):
+    def reinit(self, state):
         self.angle, self.speed = self._initstate
-        #self.rect = pygame.Rect(0, 0, self.rect.width, self.rect.height)
-        self.rect = self.strategy.get_ball_rect_for_player(self, self.players[0])
-        
+        state.reinit_ball()
         
     def update(self, state=None, *args, **kw):
         """ """
-        self.strategy.update()
+        state.update_ball()
 
 
 # ---------------------------------------------------------------------------
