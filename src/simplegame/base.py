@@ -34,10 +34,15 @@ class DelegateProperty(object):
             raise AttributeError("Attribute %s is readonly" % self.attr)
         setattr(self.get_delegate(instance), self.attr, value)
 
-# ---------------------------------------------------------------------------
+
 def GameProperty(attr, mode="r"):
     return DelegateProperty("game", attr, mode)
-        
+
+
+def StateProperty(attr, mode="r"):
+    return DelegateProperty("state", attr, mode)
+
+
 # ---------------------------------------------------------------------------
 class Options(object):
     def __init__(self, options, defaults=None):

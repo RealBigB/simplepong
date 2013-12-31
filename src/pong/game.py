@@ -15,7 +15,9 @@ from simplegame.base import Game, GameProperty
 from simplegame.sprites import ImageSprite
 
 from pong.states import Intro, Party, Service, Playing, Paused, Won
-from pong.objects import ScoreBoard, Bat, Ball
+from pong.widgets import ScoreBoard
+from pong.bat import Bat
+from pong.ball import Ball
 from pong.events import OFFCOURT
 
 logger = logging.getLogger(__name__)

@@ -3,6 +3,8 @@
 cf http://www.pygame.org/docs/tut/tom/
 """
 import logging
+logger = logging.getLogger(__name__)
+
 import random
 import math
 
@@ -10,62 +12,12 @@ import pygame
 from pygame import sprite
 from pygame.locals import * # XXX
 
-from simplegame.base import State, DelegateProperty, GameProperty
-
 from pong.events import BallOffCourt, OFFCOURT
-from pong.objects import ServiceText
+from pong.states.base import BallStrategy, RunningState
 
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-def StateProperty(attr, mode="r"):
-    return DelegateProperty("state", attr, mode)
-
-class BallStrategy(object):
-    def __init__(self, state):
-        self.state = state
-
-    ball = StateProperty("ball")
-    players = StateProperty("players")
-    player1 = StateProperty("player1")
-    player2 = StateProperty("player2")
-
-    @staticmethod
-    def get_ball_rect_for_player(ball, player):
-        p = player.rect
-        b = ball.rect.copy()
-        b.centerx = p.centerx
-        b.midleft = p.midright
-        return b
-
-    def update(self):
-        pass
-
-    def reinit(self):
-        pass
-    
-class NoopStrategy(BallStrategy):
-    pass
-
-    
-class ServiceStrategy(BallStrategy):
-    """ A ball sticking to a :class:Bat` """
-
-    def __init__(self, state):
-        super(ServiceStrategy, self).__init__(state)
-
-    def reinit(self):
-        self.ball.rect = self.get_ball_rect_for_player(self.ball, self.player1)
-        self.ball.last_hit_by = self.player1
-        
-    def update(self, *args, **kw):
-        self.ball.rect = self.get_ball_rect_for_player(self.ball, self.player1)
-        
-        
-
 class PlayingStrategy(BallStrategy):
-
     def __init__(self, state):
         super(PlayingStrategy, self).__init__(state)
         
@@ -75,7 +27,6 @@ class PlayingStrategy(BallStrategy):
         self.ball.rect = self.ball.rect.move(newpos)
         if not self._check_hit():
             self._check_out()
-
 
     def getnewpos(self, angle, speed):
         """ calculate a new position according to (angle, speed).
@@ -165,133 +116,7 @@ class PlayingStrategy(BallStrategy):
 
 
 # ---------------------------------------------------------------------------
-# The game states
-# ---------------------------------------------------------------------------
-# states are
-# - intro : the introduction / instructions screen
-# - playing : a party, from first service until one player wins
-
-class Intro(State):
-    NAME = 'intro'
-
-# ---------------------------------------------------------------------------
-class Party(State):
-    NAME = 'party'
-    
-# ---------------------------------------------------------------------------
-class Won(State):
-    NAME = 'won'
-
-    
-# ---------------------------------------------------------------------------
-class GameState(State):
-    screen = GameProperty("screen")
-    court = GameProperty("court")
-    ball = GameProperty("ball")
-    players = GameProperty("players")
-    playersprites = GameProperty("playersprites")
-    ballsprite = GameProperty("ballsprite")
-    allsprites = GameProperty("allsprites")
-
-    BALL_STRATEGY = NoopStrategy
-    
-    @property
-    def player1(self):
-        return self.players[0]
-
-    @property
-    def player2(self):
-        return self.players[1]
-
-    def on_init(self):
-        self.bgcolor = self.game.getopt("bgcolor", (0, 0, 0))
-        self.background = pygame.Surface(self.screen.get_size()).convert()
-        self.background.fill(self.bgcolor)
-        self.ball_strategy = self.BALL_STRATEGY(self)
-        
-    def on_start(self, resume):
-        pass
-
-    def on_update(self):
-        self.clearsprites()
-        self.updatesprites()
-
-    def on_render(self):
-        self.drawsprites()
-
-    def on_done(self):
-        self.clearsprites()
-
-    def clearsprites(self):
-        for rect in self.ball.rect, self.player1.rect, self.player2.rect:
-            self.screen.blit(self.background, rect, rect)
-
-    def drawsprites(self):
-        for sprite in self.allsprites:
-            sprite.draw(self.screen)
-
-    def updatesprites(self):
-        for sprite in self.allsprites:
-            sprite.update(self)
-
-    def reinit_ball(self):
-        self.ball_strategy.reinit()
-    
-    def update_ball(self):
-        self.ball_strategy.update()
-
-    def update_players(self):
-        pass
-    
-# ---------------------------------------------------------------------------
-class Service(GameState):
-    NAME = 'service'
-    
-    BALL_STRATEGY = ServiceStrategy
-
-    def on_init(self):
-        super(Service, self).on_init()
-        self.text = ServiceText("Press space to start", self.screen, self.background)
-        
-    def on_start(self, resume):
-        super(Service, self).on_start(resume)
-        self.ball.reinit(self)
-        for player in self.players:
-            player.reinit(self)
-       
-    def on_keydown(self, event):
-        # XXX quelque chose de plus élégant ?
-        if event.key == K_a:
-            self.player1.moveup()
-        elif event.key == K_q:
-            self.player1.movedown()
-        elif event.key == K_UP:
-            self.player2.moveup()
-        elif event.key == K_DOWN:
-            self.player2.movedown()
-
-    def on_keyup(self, event):
-        if event.key == K_SPACE:
-            self.goto("playing")
-            return
-        
-        elif event.key == K_a or event.key == K_q:
-            self.player1.still()
-        elif event.key == K_UP or event.key == K_DOWN:
-            self.player2.still()
-
-    def on_render(self):
-        self.text.draw()
-        super(Service, self).on_render()
-
-    def on_done(self):
-        self.text.clear()
-        super(Service, self).on_done()
-
-
-        
-# ---------------------------------------------------------------------------
-class Playing(GameState):
+class Playing(RunningState):
     NAME = 'playing'
 
     BALL_STRATEGY = PlayingStrategy
@@ -353,16 +178,3 @@ class Playing(GameState):
         PlayingStrategy(self).update()
 
 
-
-# ---------------------------------------------------------------------------
-class Paused(GameState):
-    NAME = 'paused'
-
-    def on_keyup(self, event):
-        if event.key == K_SPACE:
-            logger.debug("Pause -> playing")
-            self.game.goto("playing")
-            self.done = True
-
-    def updatespites(self):
-        pass
